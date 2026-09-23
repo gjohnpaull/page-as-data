@@ -57,9 +57,23 @@ async function launchChrome(port) {
   const child = spawn(
     chrome,
     ['--headless=new', `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, '--no-first-run', '--no-default-browser-check', 'about:blank'],
-    { stdio: 'ignore' },
+    { stdio: ['ignore', 'ignore', 'pipe'] },
   )
-  for (let i = 0; i < 100 && !(await devtoolsVersion(port)); i++) await sleep(100)
+  let stderr = ''
+  child.stderr.on('data', (d) => (stderr = (stderr + d).slice(-2000)))
+  let exited = null
+  child.on('exit', (code) => (exited = code))
+  // A first start on a cold machine (a fresh CI runner) can take well over 10s.
+  const deadline = Date.now() + 30000
+  while (!(await devtoolsVersion(port))) {
+    if (exited !== null) throw new Error(`Chrome exited (code ${exited}) before it opened port ${port}:\n${stderr.trim()}`)
+    if (Date.now() > deadline) {
+      child.kill()
+      throw new Error(`Chrome did not open port ${port} within 30s:\n${stderr.trim()}`)
+    }
+    await sleep(100)
+  }
+  child.stderr.destroy()
   return {
     close: () => {
       child.kill()
