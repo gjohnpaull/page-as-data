@@ -1,0 +1,42 @@
+{
+  "name": "page-as-data",
+  "version": "0.1.0",
+  "description": "Read a web page as data instead of a screenshot: what is on screen, what broke behind it, and layout defects at phone and desktop widths. For developers and AI coding agents.",
+  "type": "module",
+  "bin": {
+    "page-as-data": "cli.mjs"
+  },
+  "exports": {
+    ".": "./cli.mjs",
+    "./in-page": "./page-as-data.js"
+  },
+  "files": [
+    "cli.mjs",
+    "page-as-data.js"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test \"test/*.test.mjs\""
+  },
+  "keywords": [
+    "debugging",
+    "screenshot",
+    "chrome-devtools-protocol",
+    "layout",
+    "responsive",
+    "accessibility",
+    "wcag",
+    "ai-agent",
+    "llm",
+    "nextjs",
+    "react"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gjohnpaull/page-as-data.git"
+  },
+  "license": "MIT",
+  "author": "gjohnpaull"
+}
