@@ -14,6 +14,7 @@
  *   __pageAsData.layoutIssues()        overflow, cut-off controls, broken sticky, small targets
  *   await __pageAsData.click('Save')   click a control by its name, then settle
  *   await __pageAsData.fill('Email', 'a@b.co')   fill a field by its label, then settle
+ *   await __pageAsData.waitFor('Saved')  wait until text is on screen, then settle
  */
 ;(() => {
   if (window.__pageAsData) return
@@ -40,11 +41,41 @@
     return originalFetch.call(this, input, init).finally(() => rscInFlight--)
   }
 
+  // --- pending short timers -----------------------------------------------------
+  // UI choreography schedules the next screen on a timer: fade out, then swap
+  // the route 300-800ms later. Between the fade and the swap nothing mutates,
+  // so "the DOM has been quiet for 250ms" reports the OLD screen as finished.
+  // Count timers of up to 1s that have not fired yet; longer ones are idle
+  // timeouts, polling and debounces, which a reading must not wait for.
+  const SHORT_TIMER_MS = 1000
+  const shortTimers = new Set()
+  const originalSetTimeout = window.setTimeout
+  const originalClearTimeout = window.clearTimeout
+  window.setTimeout = function (handler, delay, ...args) {
+    if (typeof handler !== 'function' || Number(delay) > SHORT_TIMER_MS) return originalSetTimeout.call(this, handler, delay, ...args)
+    const id = originalSetTimeout.call(
+      this,
+      function (...a) {
+        shortTimers.delete(id)
+        return handler.apply(this, a)
+      },
+      delay,
+      ...args,
+    )
+    shortTimers.add(id)
+    return id
+  }
+  window.clearTimeout = function (id) {
+    shortTimers.delete(id)
+    return originalClearTimeout.call(this, id)
+  }
+
   // --- helpers ----------------------------------------------------------------
   const text = (el) => (el?.textContent ?? '').replace(/\s+/g, ' ').trim()
   const visibleText = (el) => (el?.innerText ?? '').replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim()
   const main = () => document.querySelector('main') ?? document.body
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+  // The original timer: page-as-data's own waits must not count as the page's.
+  const sleep = (ms) => new Promise((r) => originalSetTimeout(r, ms))
   const box = (r) => ({ x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) })
   const cls = (el) => String(el.className?.baseVal ?? el.className ?? '').split(/\s+/).filter(Boolean).slice(0, 3).join('.')
   const where = (el) => `${el.tagName.toLowerCase()}${el.id ? `#${el.id}` : cls(el) ? `.${cls(el)}` : ''}`
@@ -96,8 +127,8 @@
 
   /**
    * Resolves when no RSC request is in flight, no React stream is waiting to
-   * be revealed, no skeleton or aria-busy region is mounted, and the DOM has
-   * been quiet for 250ms. Finishes running (finite) animations first, so a
+   * be revealed, no skeleton or aria-busy region is mounted, no short timer
+   * (≤1s) is still pending, and the DOM has been quiet for 250ms. Finishes running (finite) animations first, so a
    * reading never catches content mid-fade.
    */
   async function settle({ timeoutMs = 10000, finishAnimations = true } = {}) {
@@ -110,7 +141,7 @@
         if (finishAnimations)
           for (const a of document.getAnimations()) if (a.effect?.getTiming().iterations !== Infinity) a.finish()
         const quiet = performance.now() - lastChange > 250
-        if (quiet && rscInFlight === 0 && pendingStreams() === 0 && busy() === 0 && document.readyState === 'complete')
+        if (quiet && rscInFlight === 0 && shortTimers.size === 0 && pendingStreams() === 0 && busy() === 0 && document.readyState === 'complete')
           return { settled: true, ms: Math.round(performance.now() - start) }
         await sleep(50)
       }
@@ -119,6 +150,7 @@
         ms: timeoutMs,
         why: {
           rscInFlight,
+          pendingShortTimers: shortTimers.size,
           pendingStreams: pendingStreams(),
           busy: busy(),
           // React 19 reveals streamed content on animation frames, which a
@@ -403,16 +435,16 @@
   }
 
   /** Clicks the control whose name matches, then waits for the screen to settle. */
-  async function click(name) {
+  async function click(name, { timeoutMs } = {}) {
     const el = pick(name, CONTROLS)
     if (!el) return { error: `No visible control named "${name}"`, controls: readControls({ max: 40 }).map((c) => c.name) }
     el.scrollIntoView({ block: 'center' })
     el.click()
-    return { clicked: describe(el), ...(await settle()) }
+    return { clicked: describe(el), ...(await settle({ timeoutMs })) }
   }
 
   /** Types into the field whose label matches, the way React sees typing. */
-  async function fill(label, value) {
+  async function fill(label, value, { timeoutMs } = {}) {
     const el = pick(label, 'input:not([type=hidden]), select, textarea')
     if (!el) return { error: `No visible field labelled "${label}"`, fields: readForm().map((f) => f.label) }
     el.focus()
@@ -427,7 +459,25 @@
       el.dispatchEvent(new Event('change', { bubbles: true }))
     }
     el.blur()
-    return { filled: describe(el), ...(await settle()) }
+    return { filled: describe(el), ...(await settle({ timeoutMs })) }
+  }
+
+  /**
+   * Waits until `query` is visible text on the screen, then settles. For long
+   * work whose progress keeps the DOM busy (a render, an upload): the wait ends
+   * on the outcome, not on quiet.
+   */
+  async function waitFor(query, { timeoutMs = 10000 } = {}) {
+    const q = query.toLowerCase()
+    const start = performance.now()
+    while (performance.now() - start < timeoutMs) {
+      if (visibleText(document.body).toLowerCase().includes(q)) {
+        const settled = await settle({ timeoutMs: Math.max(1000, timeoutMs - (performance.now() - start)) })
+        return { found: query, ms: Math.round(performance.now() - start), settled: settled.settled }
+      }
+      await sleep(100)
+    }
+    return { error: `"${query}" did not appear within ${timeoutMs}ms`, onScreen: visibleText(main()).slice(0, 300) }
   }
 
   // --- layout defects -------------------------------------------------------------
@@ -583,5 +633,5 @@
     }
   }
 
-  window.__pageAsData = { settle, read, inspect, layoutIssues, click, fill, readTables, readForm, readControls }
+  window.__pageAsData = { settle, read, inspect, layoutIssues, click, fill, waitFor, readTables, readForm, readControls }
 })()

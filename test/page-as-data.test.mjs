@@ -8,6 +8,8 @@ import { checkPages, findChrome, parseArgs, readPage } from '../cli.mjs'
 
 const chrome = findChrome()
 const PORT = 9339
+// Suites run concurrently; each launched Chrome needs its own debugging port.
+const STEPS_PORT = 9340
 const fixture = readFileSync(new URL('./fixture.html', import.meta.url))
 let server
 let url
@@ -132,10 +134,46 @@ describe('read', { skip: !chrome && 'no Chrome found (set CHROME_PATH)' }, () =>
   })
 })
 
+describe('steps that wait for the app', { skip: !chrome && 'no Chrome found (set CHROME_PATH)' }, () => {
+  const run = (steps) => readPage({ url, width: 1440, steps, launch: true, port: STEPS_PORT, timeoutMs: 8000 })
+
+  it('waits for a screen change scheduled on a short timer after the click', async () => {
+    const r = await run([{ click: 'Next step' }])
+    assert.equal(r.steps[0].result.error, undefined)
+    assert.match(r.page.text, /Step two/)
+  })
+
+  it('presses a key as a trusted keyboard event', async () => {
+    const r = await run([{ press: 'F9' }])
+    assert.equal(r.steps[0].result.error, undefined)
+    assert.match(r.page.text, /Shortcut pressed/)
+  })
+
+  it('waits for text that only appears when a long job finishes', async () => {
+    const r = await run([{ click: 'Start job' }, { waitFor: 'Job done' }])
+    assert.deepEqual(r.steps.map((s) => s.result.error), [undefined, undefined])
+    assert.match(r.page.text, /Job done/)
+  })
+
+  it('checks hash routes as themselves, without waiting for a load event that never comes', async () => {
+    const started = Date.now()
+    const [first, second] = await checkPages({ urls: [`${url}#/a`, `${url}#/b`], widths: [1440], launch: true, port: STEPS_PORT, timeoutMs: 20000 })
+    assert.equal(first.finalUrl, '/#/a')
+    assert.equal(second.finalUrl, '/#/b')
+    // Waiting for a load event on the hash change would take the full 20s.
+    assert.ok(Date.now() - started < 15000, `took ${Date.now() - started}ms`)
+  })
+
+  it('reports a wait-for that never appears, with what is on screen instead', async () => {
+    const r = await readPage({ url, width: 1440, steps: [{ waitFor: 'Never shown' }], launch: true, port: STEPS_PORT, timeoutMs: 1000 })
+    assert.match(r.steps[0].result.error, /Never shown/)
+  })
+})
+
 describe('parseArgs', () => {
   it('keeps steps in the order given', () => {
-    const o = parseArgs(['read', 'http://x', '--click', 'New', '--fill', 'Name=A=B', '--click', 'Save'])
-    assert.deepEqual(o.steps, [{ click: 'New' }, { label: 'Name', value: 'A=B' }, { click: 'Save' }])
+    const o = parseArgs(['read', 'http://x', '--click', 'New', '--fill', 'Name=A=B', '--press', 'F9', '--wait-for', 'Saved', '--click', 'Save'])
+    assert.deepEqual(o.steps, [{ click: 'New' }, { label: 'Name', value: 'A=B' }, { press: 'F9' }, { waitFor: 'Saved' }, { click: 'Save' }])
   })
 
   it('rejects a fill without a label', () => {

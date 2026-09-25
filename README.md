@@ -75,7 +75,12 @@ form fields, tables, buttons and the visible text.
 ### 3. Reproduce a bug
 
 Steps run in the order you give them. `--click` finds a button or link by its
-name. `--fill` finds a field by its label. The page settles after each step.
+name. `--fill` finds a field by its label. `--press` sends a real key press
+(`F9`, `Enter`, `Escape`, a character…), which keyboard-shortcut handlers that
+check `event.isTrusted` accept. `--wait-for "text"` waits (up to `--timeout`)
+until that text is on screen, for long work whose progress never goes quiet —
+a render, an upload. The page settles after each step, including screen
+changes an app schedules on a short timer (a fade, then the next route).
 
 ```sh
 npx page-as-data read http://localhost:3000/orders \

@@ -4,6 +4,7 @@
  * Zero dependencies (Node 22+ and a Chrome/Chromium/Edge).
  *
  *   page-as-data read  <url> [--width 390] [--click <name>]... [--fill <label=value>]...
+ *                            [--press <key>]... [--wait-for <text>]...
  *                            [--inspect <text|selector>]... [--screenshot <file.png>]
  *   page-as-data check <url...> [--widths 390,1440] [--strict]
  *
@@ -84,6 +85,26 @@ async function launchChrome(port) {
       }
     },
   }
+}
+
+const NAMED_KEYS = {
+  Enter: 13, Escape: 27, Tab: 9, Backspace: 8, Delete: 46, Space: 32,
+  ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, Home: 36, End: 35, PageUp: 33, PageDown: 34,
+}
+
+/** CDP key event fields for "F9", "Enter", "a", "7"... */
+export function keyEvent(key) {
+  const fn = /^F([1-9]|1[0-2])$/.exec(key)
+  if (fn) return { key, code: key, windowsVirtualKeyCode: 111 + Number(fn[1]) }
+  if (key in NAMED_KEYS) {
+    const k = key === 'Space' ? ' ' : key
+    return { key: k, code: key, windowsVirtualKeyCode: NAMED_KEYS[key], ...(key === 'Space' ? { text: ' ' } : key === 'Enter' ? { text: '\r' } : {}) }
+  }
+  if (key.length === 1) {
+    const code = /[0-9]/.test(key) ? `Digit${key}` : /[a-z]/i.test(key) ? `Key${key.toUpperCase()}` : ''
+    return { key, code, text: key, windowsVirtualKeyCode: key.toUpperCase().charCodeAt(0) }
+  }
+  throw new Error(`Unknown key "${key}". Use a character, F1-F12, or one of: ${Object.keys(NAMED_KEYS).join(', ')}`)
 }
 
 /** A minimal Chrome DevTools Protocol client over Node's built-in WebSocket. */
@@ -196,8 +217,17 @@ async function openTab({ port = 9222, launch = false } = {}) {
       const loaded = cdp.waitFor((m) => m.method === 'Page.loadEventFired' && m.sessionId === sessionId, timeoutMs)
       const nav = await send('Page.navigate', { url })
       if (nav.errorText) throw new Error(`Could not open ${url}: ${nav.errorText}`)
-      await loaded
+      // A same-document navigation (only the #hash changed) has no loaderId and
+      // fires no load event: waiting for one would burn the whole timeout.
+      if (nav.loaderId) await loaded
       return evaluate(`window.__pageAsData.settle({ timeoutMs: ${Number(timeoutMs)} })`)
+    },
+    /** A real (trusted) key press, as a keyboard shortcut handler sees it. */
+    async press(key, timeoutMs) {
+      const k = keyEvent(key)
+      await send('Input.dispatchKeyEvent', { type: k.text ? 'keyDown' : 'rawKeyDown', ...k })
+      await send('Input.dispatchKeyEvent', { type: 'keyUp', ...k, text: undefined })
+      return { pressed: key, ...(await evaluate(`window.__pageAsData.settle({ timeoutMs: ${Number(timeoutMs)} })`)) }
     },
     async screenshot(file) {
       const { data } = await send('Page.captureScreenshot', { format: 'png' })
@@ -245,11 +275,16 @@ export async function readPage({ url, width = 1440, steps = [], inspect = [], sc
     await tab.setWidth(width)
     const settle = await tab.goto(url, timeoutMs)
     const stepLog = []
+    const limit = JSON.stringify({ timeoutMs })
     for (const step of steps) {
       const result =
         step.click !== undefined
-          ? await tab.evaluate(`window.__pageAsData.click(${JSON.stringify(step.click)})`)
-          : await tab.evaluate(`window.__pageAsData.fill(${JSON.stringify(step.label)}, ${JSON.stringify(step.value)})`)
+          ? await tab.evaluate(`window.__pageAsData.click(${JSON.stringify(step.click)}, ${limit})`)
+          : step.press !== undefined
+            ? await tab.press(step.press, timeoutMs)
+            : step.waitFor !== undefined
+              ? await tab.evaluate(`window.__pageAsData.waitFor(${JSON.stringify(step.waitFor)}, ${limit})`)
+              : await tab.evaluate(`window.__pageAsData.fill(${JSON.stringify(step.label)}, ${JSON.stringify(step.value)}, ${limit})`)
       stepLog.push({ step, result })
       if (result.error) break
     }
@@ -292,7 +327,7 @@ export async function checkPages({ urls, widths = [390, 1440], timeoutMs = 15000
         try {
           const settle = await tab.goto(url, timeoutMs)
           const layout = classifyLayout(await tab.evaluate('window.__pageAsData.layoutIssues()'), settle)
-          const finalUrl = await tab.evaluate('location.pathname + location.search')
+          const finalUrl = await tab.evaluate('location.pathname + location.search + location.hash')
           for (const e of tab.events.exceptions) layout.errors.push({ kind: 'exception', message: `Uncaught: ${e}` })
           for (const r of tab.events.failedRequests)
             layout.errors.push({ kind: 'failed-request', message: `${r.method ?? ''} ${r.url} → ${r.status}`.trim() })
@@ -324,6 +359,10 @@ const HELP = `page-as-data — read a web page as data instead of a screenshot
       --width 390               viewport width (default 1440)
       --click "New product"     click a control by its name; repeatable, in order
       --fill "Email=a@b.co"     fill a field by its label; repeatable, in order
+      --press F9                press a key (real keyboard event): a character,
+                                F1-F12, Enter, Escape, Tab, arrows...; repeatable
+      --wait-for "Saved"        wait until this text is on screen (for long work
+                                whose progress never goes quiet); uses --timeout
       --inspect "Save"          box, visibility, colours and contrast of an element
                                 (text or CSS selector); repeatable
       --screenshot out.png      ALSO save a screenshot — only for what data
@@ -357,6 +396,8 @@ export function parseArgs(argv) {
     if (a === '--widths') opts.widths = value(++i, a).split(',').map(Number)
     else if (a === '--width') opts.width = Number(value(++i, a))
     else if (a === '--click') opts.steps.push({ click: value(++i, a) })
+    else if (a === '--press') opts.steps.push({ press: value(++i, a) })
+    else if (a === '--wait-for') opts.steps.push({ waitFor: value(++i, a) })
     else if (a === '--fill') {
       const v = value(++i, a)
       const eq = v.indexOf('=')
@@ -383,8 +424,16 @@ function printRead(r) {
   out(`${page.title || '(no title)'} — ${page.url} @ ${r.width}px${r.settle.settled ? `, settled in ${r.settle.ms}ms` : `, NOT settled: ${JSON.stringify(r.settle.why)}`}`)
 
   for (const { step, result } of r.steps) {
-    const what = step.click !== undefined ? `click "${step.click}"` : `fill "${step.label}" = "${step.value}"`
-    out(result.error ? `  ✖ ${what}: ${result.error}\n    available: ${(result.controls ?? result.fields).join(' · ')}` : `  ✔ ${what} → ${result.clicked ?? result.filled}`)
+    const what =
+      step.click !== undefined ? `click "${step.click}"`
+      : step.press !== undefined ? `press ${step.press}`
+      : step.waitFor !== undefined ? `wait for "${step.waitFor}"`
+      : `fill "${step.label}" = "${step.value}"`
+    const done = result.clicked ?? result.filled ?? (result.found !== undefined ? `on screen after ${result.ms}ms` : 'sent')
+    const hint = result.controls ?? result.fields
+    if (result.error) out(`  ✖ ${what}: ${result.error}
+    ${hint ? `available: ${hint.join(' · ')}` : `on screen: ${result.onScreen ?? ''}`}`)
+    else out(`  ✔ ${what} → ${done}${result.settled === false ? ' (did not settle)' : ''}`)
   }
 
   const list = []

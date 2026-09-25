@@ -77,6 +77,15 @@
       <button type="button" id="add">Add row</button>
       <p id="greeting"></p>
 
+      <!-- Timed screen change: fade out, then swap on a 500ms timer (kiosk/route-transition pattern). -->
+      <button type="button" id="next" style="transition: opacity 400ms">Next step</button>
+      <p id="step">Step one</p>
+      <!-- Only a trusted key press counts, like a real keyboard shortcut handler. -->
+      <p id="shortcut"></p>
+      <!-- A long job whose progress text keeps changing, so the DOM is never quiet. -->
+      <button type="button" id="job">Start job</button>
+      <p id="job-status"></p>
+
       <div role="alert">Saving failed: the server did not answer</div>
       <img src="/missing-image.png" alt="Logo" />
 
@@ -94,6 +103,21 @@
         const row = document.createElement('tr')
         row.innerHTML = `<td>${document.getElementById('name').value || 'New'}</td><td>User</td>`
         document.querySelector('#people tbody').append(row)
+      })
+      document.getElementById('next').addEventListener('click', (e) => {
+        e.target.style.opacity = '0'
+        setTimeout(() => (document.getElementById('step').textContent = 'Step two'), 500)
+      })
+      window.addEventListener('keydown', (e) => {
+        if (e.key === 'F9' && e.isTrusted) document.getElementById('shortcut').textContent = 'Shortcut pressed'
+      })
+      document.getElementById('job').addEventListener('click', () => {
+        const started = Date.now()
+        const tick = setInterval(() => {
+          const pct = Math.min(100, Math.round(((Date.now() - started) / 1500) * 100))
+          document.getElementById('job-status').textContent = pct < 100 ? `Working ${pct}%` : 'Job done'
+          if (pct >= 100) clearInterval(tick)
+        }, 50)
       })
       console.error('Fixture console error')
       fetch('/api/missing')
