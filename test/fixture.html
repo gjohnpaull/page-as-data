@@ -85,6 +85,9 @@
       <!-- A long job whose progress text keeps changing, so the DOM is never quiet. -->
       <button type="button" id="job">Start job</button>
       <p id="job-status"></p>
+      <!-- A price formatted by Intl.NumberFormat: a no-break space between code and amount, in the name and on screen. -->
+      <button type="button" id="buy" aria-label="Buy print, AED&#160;20">Buy</button>
+      <p id="paid"></p>
       <!-- Faded out by a wrapper, not by itself: still invisible. -->
       <div class="faded-wrapper" style="opacity: 0"><button type="button">Faded action</button></div>
 
@@ -112,6 +115,9 @@
       })
       window.addEventListener('keydown', (e) => {
         if (e.key === 'F9' && e.isTrusted) document.getElementById('shortcut').textContent = 'Shortcut pressed'
+      })
+      document.getElementById('buy').addEventListener('click', () => {
+        document.getElementById('paid').textContent = 'Paid AED 20'
       })
       document.getElementById('job').addEventListener('click', () => {
         const started = Date.now()

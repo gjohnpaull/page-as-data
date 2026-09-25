@@ -86,6 +86,10 @@
 
   // --- helpers ----------------------------------------------------------------
   const text = (el) => (el?.textContent ?? '').replace(/\s+/g, ' ').trim()
+  // How a query is compared with a name or the screen: case-blind, and every run of
+  // whitespace (a no-break space from Intl.NumberFormat, a line break) is one space,
+  // since that is how the report prints it and so what gets typed back.
+  const fold = (s) => s.replace(/\s+/g, ' ').trim().toLowerCase()
   const visibleText = (el) => (el?.innerText ?? '').replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim()
   const main = () => document.querySelector('main') ?? document.body
   // The original timer: page-as-data's own waits must not count as the page's.
@@ -109,7 +113,10 @@
       text(el) ||
       el.getAttribute('name') ||
       ''
-    ).slice(0, 80)
+    )
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 80)
   }
 
   const describe = (el) => {
@@ -379,12 +386,12 @@
     } catch {
       // not a selector — match by name or visible text below
     }
-    const q = query.toLowerCase()
+    const q = fold(query)
     const matches = [...document.querySelectorAll(`${CONTROLS}, h1, h2, h3, h4, label, p, span, td, th, li, img, [role]`)].filter(
-      (el) => nameOf(el).toLowerCase().includes(q),
+      (el) => fold(nameOf(el)).includes(q),
     )
     // Keep the innermost match: a <span> inside the <button> is the same thing.
-    return matches.filter((el) => !matches.some((other) => other !== el && el.contains(other) && nameOf(other).toLowerCase().includes(q)))
+    return matches.filter((el) => !matches.some((other) => other !== el && el.contains(other) && fold(nameOf(other)).includes(q)))
   }
 
   /** Answers "is it there, can I see it, where is it, what does it look like". */
@@ -440,11 +447,11 @@
 
   // --- actions: reproduce a bug -------------------------------------------------
   function pick(query, selector) {
-    const q = query.toLowerCase()
+    const q = fold(query)
     const candidates = [...document.querySelectorAll(selector)].filter(isRendered)
     return (
-      candidates.find((el) => nameOf(el).toLowerCase() === q) ??
-      candidates.find((el) => nameOf(el).toLowerCase().includes(q)) ??
+      candidates.find((el) => fold(nameOf(el)) === q) ??
+      candidates.find((el) => fold(nameOf(el)).includes(q)) ??
       null
     )
   }
@@ -483,10 +490,10 @@
    * on the outcome, not on quiet.
    */
   async function waitFor(query, { timeoutMs = 10000 } = {}) {
-    const q = query.toLowerCase()
+    const q = fold(query)
     const start = performance.now()
     while (performance.now() - start < timeoutMs) {
-      if (visibleText(document.body).toLowerCase().includes(q)) {
+      if (fold(visibleText(document.body)).includes(q)) {
         const settled = await settle({ timeoutMs: Math.max(1000, timeoutMs - (performance.now() - start)) })
         return { found: query, ms: Math.round(performance.now() - start), settled: settled.settled }
       }

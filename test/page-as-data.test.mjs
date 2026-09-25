@@ -163,6 +163,13 @@ describe('steps that wait for the app', { skip: !chrome && 'no Chrome found (set
     assert.match(r.page.text, /Job done/)
   })
 
+  it('matches names and text that contain a no-break space by what they print', async () => {
+    // Intl.NumberFormat puts U+00A0 in "AED 20"; the report prints it as a space,
+    // so that is what a person or agent types back.
+    const r = await run([{ click: 'Buy print, AED 20' }, { waitFor: 'Paid AED 20' }])
+    assert.deepEqual(r.steps.map((s) => s.result.error), [undefined, undefined])
+  })
+
   it('checks hash routes as themselves, without waiting for a load event that never comes', async () => {
     const started = Date.now()
     const [first, second] = await checkPages({ urls: [`${url}#/a`, `${url}#/b`], widths: [1440], launch: true, port: freshPort(), timeoutMs: 20000 })
