@@ -8,8 +8,10 @@ import { checkPages, findChrome, parseArgs, readPage } from '../cli.mjs'
 
 const chrome = findChrome()
 const PORT = 9339
-// Suites run concurrently; each launched Chrome needs its own debugging port.
-const STEPS_PORT = 9340
+// Suites run concurrently, and a killed Chrome can hold its port for a moment:
+// every launch in the steps suite gets a fresh debugging port.
+let nextPort = 9340
+const freshPort = () => nextPort++
 const fixture = readFileSync(new URL('./fixture.html', import.meta.url))
 let server
 let url
@@ -80,7 +82,7 @@ describe('read', { skip: !chrome && 'no Chrome found (set CHROME_PATH)' }, () =>
       url,
       width: 1440,
       steps: [{ label: 'Name', value: 'Ada' }, { click: 'Add row' }],
-      inspect: ['Faint note', 'Secret', 'Hidden action', 'Modern faint', 'Primary action', 'Gradient action', 'Caption on photo'],
+      inspect: ['Faint note', 'Secret', 'Hidden action', 'Modern faint', 'Primary action', 'Gradient action', 'Caption on photo', 'Faded action'],
       launch: true,
       port: PORT,
     })
@@ -118,6 +120,12 @@ describe('read', { skip: !chrome && 'no Chrome found (set CHROME_PATH)' }, () =>
     assert.match(hidden.cutOffBy, /clipping-bar/)
   })
 
+  it('reports an element faded out by an ancestor as not visible, naming the ancestor', () => {
+    const faded = r.inspected.at(-1).elements[0]
+    assert.equal(faded.visible, false)
+    assert.match(faded.hiddenBecause, /opacity: 0 on div\.faded-wrapper/)
+  })
+
   it('reads contrast in modern colour spaces (oklch), not just rgb()', () => {
     const [modernFaint, primary] = r.inspected.slice(3).map((q) => q.elements[0])
     assert.equal(modernFaint.readable, false, `contrast ${modernFaint.contrast}`)
@@ -135,7 +143,7 @@ describe('read', { skip: !chrome && 'no Chrome found (set CHROME_PATH)' }, () =>
 })
 
 describe('steps that wait for the app', { skip: !chrome && 'no Chrome found (set CHROME_PATH)' }, () => {
-  const run = (steps) => readPage({ url, width: 1440, steps, launch: true, port: STEPS_PORT, timeoutMs: 8000 })
+  const run = (steps) => readPage({ url, width: 1440, steps, launch: true, port: freshPort(), timeoutMs: 8000 })
 
   it('waits for a screen change scheduled on a short timer after the click', async () => {
     const r = await run([{ click: 'Next step' }])
@@ -157,7 +165,7 @@ describe('steps that wait for the app', { skip: !chrome && 'no Chrome found (set
 
   it('checks hash routes as themselves, without waiting for a load event that never comes', async () => {
     const started = Date.now()
-    const [first, second] = await checkPages({ urls: [`${url}#/a`, `${url}#/b`], widths: [1440], launch: true, port: STEPS_PORT, timeoutMs: 20000 })
+    const [first, second] = await checkPages({ urls: [`${url}#/a`, `${url}#/b`], widths: [1440], launch: true, port: freshPort(), timeoutMs: 20000 })
     assert.equal(first.finalUrl, '/#/a')
     assert.equal(second.finalUrl, '/#/b')
     // Waiting for a load event on the hash change would take the full 20s.
@@ -165,7 +173,7 @@ describe('steps that wait for the app', { skip: !chrome && 'no Chrome found (set
   })
 
   it('reports a wait-for that never appears, with what is on screen instead', async () => {
-    const r = await readPage({ url, width: 1440, steps: [{ waitFor: 'Never shown' }], launch: true, port: STEPS_PORT, timeoutMs: 1000 })
+    const r = await readPage({ url, width: 1440, steps: [{ waitFor: 'Never shown' }], launch: true, port: freshPort(), timeoutMs: 1000 })
     assert.match(r.steps[0].result.error, /Never shown/)
   })
 })

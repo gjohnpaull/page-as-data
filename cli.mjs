@@ -230,6 +230,9 @@ async function openTab({ port = 9222, launch = false } = {}) {
       return { pressed: key, ...(await evaluate(`window.__pageAsData.settle({ timeoutMs: ${Number(timeoutMs)} })`)) }
     },
     async screenshot(file) {
+      // Finish what is still animating, then let two frames paint, so the
+      // picture shows the settled state rather than the last composited frame.
+      await evaluate('window.__pageAsData.settle({ timeoutMs: 3000 }).then(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))))')
       const { data } = await send('Page.captureScreenshot', { format: 'png' })
       writeFileSync(file, Buffer.from(data, 'base64'))
     },

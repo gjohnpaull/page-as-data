@@ -77,7 +77,7 @@
       <button type="button" id="add">Add row</button>
       <p id="greeting"></p>
 
-      <!-- Timed screen change: fade out, then swap on a 500ms timer (kiosk/route-transition pattern). -->
+      <!-- Timed screen change: fade out, then swap on a 1.5s timer (staggered reveal / route-transition pattern). -->
       <button type="button" id="next" style="transition: opacity 400ms">Next step</button>
       <p id="step">Step one</p>
       <!-- Only a trusted key press counts, like a real keyboard shortcut handler. -->
@@ -85,6 +85,8 @@
       <!-- A long job whose progress text keeps changing, so the DOM is never quiet. -->
       <button type="button" id="job">Start job</button>
       <p id="job-status"></p>
+      <!-- Faded out by a wrapper, not by itself: still invisible. -->
+      <div class="faded-wrapper" style="opacity: 0"><button type="button">Faded action</button></div>
 
       <div role="alert">Saving failed: the server did not answer</div>
       <img src="/missing-image.png" alt="Logo" />
@@ -106,7 +108,7 @@
       })
       document.getElementById('next').addEventListener('click', (e) => {
         e.target.style.opacity = '0'
-        setTimeout(() => (document.getElementById('step').textContent = 'Step two'), 500)
+        setTimeout(() => (document.getElementById('step').textContent = 'Step two'), 1500)
       })
       window.addEventListener('keydown', (e) => {
         if (e.key === 'F9' && e.isTrusted) document.getElementById('shortcut').textContent = 'Shortcut pressed'
@@ -119,6 +121,14 @@
           if (pct >= 100) clearInterval(tick)
         }, 50)
       })
+      // Pollers that never stop: a self-rescheduling timer and an awaited sleep
+      // loop. A reading must not wait for either.
+      ;(function poll() {
+        setTimeout(poll, 300)
+      })()
+      ;(async () => {
+        for (;;) await new Promise((r) => setTimeout(r, 400))
+      })()
       console.error('Fixture console error')
       fetch('/api/missing')
       setTimeout(() => {

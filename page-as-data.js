@@ -45,24 +45,38 @@
   // UI choreography schedules the next screen on a timer: fade out, then swap
   // the route 300-800ms later. Between the fade and the swap nothing mutates,
   // so "the DOM has been quiet for 250ms" reports the OLD screen as finished.
-  // Count timers of up to 1s that have not fired yet; longer ones are idle
-  // timeouts, polling and debounces, which a reading must not wait for.
-  const SHORT_TIMER_MS = 1000
-  const shortTimers = new Set()
+  // Staggered reveals do the same, 1-2s after arrival. Count timers of up to
+  // 2s that have not fired yet; longer ones are idle timeouts and debounces.
+  // Pollers are not counted either: a timer that re-arms itself (scheduled from
+  // its own callback, or from the promise continuation it resolves) would keep
+  // a reading waiting forever — pages, extensions and security tools run them.
+  const SHORT_TIMER_MS = 2000
+  const shortTimers = new Map() // id → { delay, source }, to say what a page is waiting on
   const originalSetTimeout = window.setTimeout
   const originalClearTimeout = window.clearTimeout
+  let runningSource = null // source of the timer callback now running (and its microtasks)
   window.setTimeout = function (handler, delay, ...args) {
     if (typeof handler !== 'function' || Number(delay) > SHORT_TIMER_MS) return originalSetTimeout.call(this, handler, delay, ...args)
+    const source = String(handler).replace(/\s+/g, ' ').slice(0, 80)
+    const polling = runningSource === source
     const id = originalSetTimeout.call(
       this,
       function (...a) {
         shortTimers.delete(id)
-        return handler.apply(this, a)
+        runningSource = source
+        try {
+          return handler.apply(this, a)
+        } finally {
+          // After the continuations this callback resolved have run.
+          queueMicrotask(() => {
+            if (runningSource === source) runningSource = null
+          })
+        }
       },
       delay,
       ...args,
     )
-    shortTimers.add(id)
+    if (!polling) shortTimers.set(id, { delay: Number(delay) || 0, source })
     return id
   }
   window.clearTimeout = function (id) {
@@ -128,7 +142,7 @@
   /**
    * Resolves when no RSC request is in flight, no React stream is waiting to
    * be revealed, no skeleton or aria-busy region is mounted, no short timer
-   * (≤1s) is still pending, and the DOM has been quiet for 250ms. Finishes running (finite) animations first, so a
+   * (≤2s) is still pending, and the DOM has been quiet for 250ms. Finishes running (finite) animations first, so a
    * reading never catches content mid-fade.
    */
   async function settle({ timeoutMs = 10000, finishAnimations = true } = {}) {
@@ -150,7 +164,7 @@
         ms: timeoutMs,
         why: {
           rscInFlight,
-          pendingShortTimers: shortTimers.size,
+          pendingShortTimers: [...shortTimers.values()],
           pendingStreams: pendingStreams(),
           busy: busy(),
           // React 19 reveals streamed content on animation frames, which a
@@ -348,10 +362,11 @@
       if (cs.display === 'none') return `display: none on ${where(e)}`
       if (e.hidden) return `hidden attribute on ${where(e)}`
       if (e.getAttribute('aria-hidden') === 'true' && e === el) return 'aria-hidden="true"'
+      // Opacity multiplies down the tree: a faded-out wrapper hides everything in it.
+      if (Number(cs.opacity) === 0) return e === el ? 'opacity: 0' : `opacity: 0 on ${where(e)}`
     }
     const cs = getComputedStyle(el)
     if (cs.visibility === 'hidden') return 'visibility: hidden'
-    if (Number(cs.opacity) === 0) return 'opacity: 0'
     const r = el.getBoundingClientRect()
     if (r.width === 0 || r.height === 0) return 'zero size'
     return null
